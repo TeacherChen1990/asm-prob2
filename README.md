@@ -205,7 +205,7 @@ VARIABLE
 * 在同一周期内对不同对象执行操作。
 
 ## 算法实现:
-* problem5： /asm/problem2.asm
+* prob2： /asm/prob2.asm
 * cat     : /asm/cat.asm
 * hello   : /asm/hello.asm
 

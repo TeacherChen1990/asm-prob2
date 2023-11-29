@@ -24,8 +24,8 @@ class TranslatorTest(unittest.TestCase):
         status = filecmp.cmp('./tmp/result.tmp', './target/cat')
         self.assertEqual(status, True)
 
-    def test_prob5(self):
-        print("Testing problem5")
-        translator.translate("./asm/problem5.asm", "./tmp/result.tmp")
-        status = filecmp.cmp('./tmp/result.tmp', 'target/problem5')
+    def test_prob2(self):
+        print("Testing prob2")
+        translator.translate("./asm/prob2.asm", "./tmp/result.tmp")
+        status = filecmp.cmp('./tmp/result.tmp', './target/prob2')
         self.assertEqual(status, True)

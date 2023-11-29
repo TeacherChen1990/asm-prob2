@@ -86,6 +86,7 @@ class Instruction:
 
 
 def read_code(filename: str) -> {}:
+    # 代表执行程序 Instruction存储指令集合 Variable存储变量集合 Function存储方法集合
     program = {'Instruction': [], 'Variable': {}, 'Function': {}}
     position = Position.INSTRUCTION
     with open(filename, "r") as f:

@@ -15,8 +15,43 @@ def translate(source_name: str, target_name: str):
     write_translate(target_name, result, function_point, label_in_fun, variable, instruction_index)
 
 
+def process_line(line, result, instruction_index, last_fun, function_point, label_in_fun, index, is_first_fun):
+    if check_string("^\\S*:$", line):
+        line = pre_translation(line)
+        if check_string("^\\.\\S*:$", line):
+            line = line.replace(":", "")
+            label_in_fun[last_fun][line] = instruction_index
+        else:
+            line = line.replace(":", "")
+            function_point[line] = instruction_index
+            label_in_fun[line] = dict()
+            last_fun = line
+            if is_first_fun:
+                assert last_fun == '_START', 'Your first function should be _start'
+    else:
+        line = line.split(";")[0]
+        line = re.sub(r"\t+", "", line)
+        line = re.sub(r"\n", "", line)
+        line = re.sub(r" +", " ", line)
+        split = line.split(" ")
+        split[0] = split[0].upper()
+        assert split[0] in InstructionType.__members__, f"Line {index}, no such instrument"
+        if InstructionType[split[0]] in NO_ARGUMENT:
+            assert len(split) == 1, f"Line {index}, this instrument has no argument"
+        else:
+            assert len(split) == 2, f"Line {index}, only one argument allowed"
+        if line != "":
+            if len(split) == 2:
+                if not check_string("^\'[A-Za-z]{1}\'$", split[1]):
+                    split[1] = split[1].upper()
+                result += f"{instruction_index} {InstructionType[split[0]].value} {split[1]}\n"
+            else:
+                result += f"{instruction_index} {InstructionType[split[0]].value}\n"
+        instruction_index += 1
+    return result, instruction_index, last_fun
+
+
 def read_asm_file(source_name):
-    """ 读取asm程序源码 """
     result, last_fun = "", ""
     variable, function_point, label_in_fun = dict(), dict(), dict()
     index, instruction_index = 0, 0
@@ -39,74 +74,45 @@ def read_asm_file(source_name):
                 break
             key, value = read_variable(line)
             key = key.upper()
-            assert key != 'INPUT' and key != 'OUTPUT', "Line {}:You can't declare a variable name as INPUT or OUTPUT".format(
-                index)
-            assert key not in variable.keys(), "Line {}:You can't declare a variable two or more times".format(index)
+            assert key not in variable.keys(), f"Line {index}: You can't declare a variable two or more times"
             variable[key] = value
+
         line = f.readline()
         index += 1
         line = pre_translation(line)
         is_first_fun = True
         while line:
             if line != "" and line != "\n":
-                # 函数、标签
-                if check_string("^\\S*:$", line):
-                    line = pre_translation(line)
-                    if check_string("^\\.\\S*:$", line):
-                        line = line.replace(":", "")
-                        label_in_fun[last_fun][line] = instruction_index
-                    else:
-                        line = line.replace(":", "")
-                        function_point[line] = instruction_index
-                        label_in_fun[line] = dict()
-                        last_fun = line
-                        if is_first_fun:
-                            assert last_fun == '_START', 'Your first function should be _start'
-                            is_first_fun = False
-                else:  # 指令
-                    line = line.split(";")[0]
-                    line = re.sub(r"\t+", "", line)
-                    line = re.sub(r"\n", "", line)
-                    line = re.sub(r" +", " ", line)
-                    split = line.split(" ")
-                    split[0] = split[0].upper()
-                    assert split[0] in InstructionType.__members__, "Line {}, no such instrument".format(index)
-                    if InstructionType[split[0]] in NO_ARGUMENT:
-                        assert len(split) == 1, "Line {}, this instrument have no argument".format(index)
-                    else:
-                        assert len(split) == 2, "Line {}, only one argument allowed".format(index)
-                    if line != "":
-                        if len(split) == 2:
-                            if not check_string("^\'[A-Za-z]{1}\'$", split[1]):
-                                split[1] = split[1].upper()
-                            result = result + str(instruction_index) + " " + InstructionType[split[0]].value + " " + \
-                                     split[1] + " " + "\n"
-                        else:
-                            result = result + str(instruction_index) + " " + InstructionType[
-                                split[0]].value + " " + "\n"
-                        instruction_index += 1
+                result, instruction_index, last_fun = process_line(
+                    line, result, instruction_index, last_fun, function_point, label_in_fun, index, is_first_fun
+                )
             line = f.readline()
             index += 1
+
     return result, function_point, label_in_fun, variable, instruction_index
 
 
 def write_translate(target_name: str, result, function_point, label_in_fun, variable, instruction_index):
-    """ 将文件翻译内容写入目标文件存储 """
+    # Write to file
     with open(target_name, "w") as f:
         f.write(result)
         f.write("FUNCTION\n")
-        for i in function_point:
-            line = i + ":" + str(function_point[i]) + "\n"
+        for func, value in function_point.items():
+            line = f"{func}:{value}\n"
             f.write(line)
+
         f.write("LABEL\n")
-        for i in label_in_fun:
-            for k in label_in_fun[i]:
-                line = i + ":" + k + ":" + str(label_in_fun[i][k]) + "\n"
+        for func, labels in label_in_fun.items():
+            for label, value in labels.items():
+                line = f"{func}:{label}:{value}\n"
                 f.write(line)
+
         f.write("VARIABLE\n")
-        for i in variable:
-            line = i + ":" + variable[i] + "\n"
+        for var, value in variable.items():
+            line = f"{var}:{value}\n"
             f.write(line)
+
+    # Read from file and process
     with open(target_name, "r") as f:
         index = 0
         while index < instruction_index:
@@ -139,7 +145,7 @@ def read_variable(line: str) -> tuple[str, str]:
     ]), f"Illegal variable {line}"
 
     key, value = map(str.strip, line.split(":", 1))
-    key = re.findall("\S*", key)[0]
+    key = re.findall("\\S*", key)[0]
 
     if check_string("^.*: *-?[1-9]+[0-9]* *$", line):  # 数字
         value = re.findall("-?[1-9]+[0-9]*", value)[0]

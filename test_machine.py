@@ -32,7 +32,14 @@ class MachineTest(unittest.TestCase):
         translator.translate("./asm/prob2.asm", "./asm/target")
         result = machine.start("./asm/target", '')
         print("问题2答案：" + result)
-        self.assertEqual(int(result), 4613732)
+
+        a, b, limit = 1, 2, 4000000
+        even_sum = 0
+        while a <= limit:
+            if a % 2 == 0:
+                even_sum += a
+            a, b = b, a + b
+        self.assertEqual(int(result), even_sum)
 
 
 if __name__ == '__main__':

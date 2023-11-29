@@ -10,7 +10,8 @@ V = 4
 C = 8
 MAX = 2 ** 31 - 1  # 2^31-1
 MIN = -2 ** 31  # -2^31
-
+exit_flag = 1
+continue_flag = 0
 
 class Cell:
     """ 内存单元 """
@@ -67,9 +68,12 @@ class DataPath:
     def __init__(self, size: int, input_file: str):
         """ 模拟内存 """
         self.memory = [Cell() for _ in range(size)]
+        """ 栈： 存储动态数据 """
         self.stack = [0] * 1024
         self.size = size
+        """ 输入缓存 """
         self.input_buffer = Buffer(1024)
+        """ 输缓存 """
         self.output_buffer = Buffer(1024)
         self.registers = {
             'BR': Register(RegisterType.BR),
@@ -83,6 +87,8 @@ class DataPath:
         self.input_index = int(size * 3 / 4 - 1)
         self.output_index = self.input_index
         self.io_part = int(size * 3 / 4 - 1)
+
+        """ 输入缓冲区 """
         if input_file != '':
             with open(input_file) as f:
                 c = f.read()
@@ -134,7 +140,7 @@ class ALU:
 
     @staticmethod
     def _handle_overflow(result):
-        """ 炒作最大最小值判定 """
+        """ 越栈计算 """
         if result > MAX:
             result &= MAX
             result = MIN + result
@@ -243,6 +249,7 @@ class CPU:
         # 指令索引集合
         self.position = []
         self.datapath = datapath
+        # 时钟模拟
         self.tick = 0
         self.alu = ALU()
 
@@ -347,151 +354,179 @@ class CPU:
     def get_nzvc(self) -> int:
         return self.alu.nzvc
 
-    def ins_execute(self, ins: Instruction, position: str) -> int:
-        if ins.instruction == InstructionType['HLT']:
-            return 1
-        elif ins.instruction in MATH_INSTRUCTION:
-            if ins.instruction == InstructionType['ADD']:
-                self.math(ins, ALU.add)
-                self.datapath.set_value_register("PS", self.get_nzvc())
-            elif ins.instruction == InstructionType['SUB']:
-                self.math(ins, ALU.min)
-                self.datapath.set_value_register("PS", self.get_nzvc())
-            elif ins.instruction == InstructionType['MUL']:
-                self.math(ins, ALU.mul)
-            elif ins.instruction == InstructionType['DIV']:
-                self.math(ins, ALU.div)
-            elif ins.instruction == InstructionType['INV']:
-                # -AC->AC, nzvc -> PS
-                self.alu.put_left(self.datapath.get_value_register("AC"))
-                self.tick_tick()
-                self.datapath.set_value_register("AC", self.alu.action(ALU.inversion))
-                self.set_nzvc(Z)
-                self.datapath.set_value_register("PS", self.get_nzvc())
-                self.tick_tick()
-            # CMP
-            else:
-                self.alu.put_right(self.addressing(ins))
-                # AC - arg to check nzcv -> PS
-                self.alu.put_left(self.datapath.get_value_register("AC"))
-                self.alu.action(ALU.min)
-                self.datapath.set_value_register("PS", self.get_nzvc())
-                self.tick_tick()
-        elif ins.instruction in DATA_INSTRUCTION:
-            arg = ins.args[0]
-            if ins.instruction == InstructionType['LD']:
-                assert arg != 'OUTPUT', 'Instruction LD can\'t call OUTPUT'
-                if arg != 'INPUT':
-                    self.datapath.set_value_register('AC', self.addressing(ins))
-                    self.tick_tick()
-                elif arg == 'INPUT':
-                    # index -> AR， io->ac
-                    assert self.datapath.output_index < self.datapath.size, 'Read input out of range!'
-                    self.datapath.set_value_register("AR", self.datapath.output_index)
-                    self.datapath.output_index += 1
-                    self.tick_tick()
-                    self.datapath.set_value_register("AC",
-                                                     self.datapath.memory[self.datapath.get_value_register('AR')].value)
-                    self.tick_tick()
-            # ST
-            else:
-                assert arg != 'INPUT', 'Instruction ST can\'t call input'
-                if arg != 'OUTPUT':
-                    assert arg in self.var.keys() or check_string("^[1-9][0-9]*",
-                                                                  arg), 'You have to declare where you want to save the value by declaring a variable or address'
-                    ## arg ->　ar
-                    if arg in self.var.keys():
-                        self.alu.put_right(self.var[arg])
-                    else:
-                        self.alu.put_right(int(arg))
-                    self.datapath.set_value_register("AR", self.alu.action(ALU.or_operation))
-                    ## AC -> [AR]
-                    self.datapath.set_value_memory(self.datapath.get_value_register("AR"),
-                                                   self.datapath.get_value_register("AC"))
-                    self.tick_tick()
-                else:
-                    # AC -> outputbuffer
-                    self.datapath.output_buffer.buf[
-                        self.datapath.output_buffer.write_pointer] = self.datapath.get_value_register('AC')
-                    self.datapath.output_buffer.write_pointer += 1
-                    self.tick_tick()
-        elif ins.instruction in STACK_INSTRUCTION:
-            """ 堆栈操作 """
-            if ins.instruction == InstructionType.PUSH:
-                """ 进栈 """
-                # SP-1 -> SP
-                self.datapath.set_value_register('SP', self.datapath.get_value_register('SP') - 1)
-                self.tick_tick()
-                # AC -> STACK[SP]
-                self.datapath.stack[self.datapath.get_value_register("SP")] = self.datapath.get_value_register("AC")
-                self.tick_tick()
-            else:
-                """ 出栈 """
-                # [SP] -> AC
-                self.datapath.set_value_register("AC", self.datapath.stack[self.datapath.get_value_register("SP")])
-                self.tick_tick()
-                # SP + 1 -> SP
-                self.datapath.set_value_register('SP', self.datapath.get_value_register('SP') - 1)
-                self.tick_tick()
+    def handler_math(self, ins: Instruction):
+        """ 数据计算指令操作 """
+        if ins.instruction == InstructionType.ADD:
+            self.math(ins, ALU.add)
+            self.datapath.set_value_register("PS", self.get_nzvc())
+        elif ins.instruction == InstructionType.SUB:
+            self.math(ins, ALU.min)
+            self.datapath.set_value_register("PS", self.get_nzvc())
+        elif ins.instruction == InstructionType.MUL:
+            self.math(ins, ALU.mul)
+        elif ins.instruction == InstructionType.DIV:
+            self.math(ins, ALU.div)
+        elif ins.instruction == InstructionType.INV:
+            # -AC->AC, nzvc -> PS
+            self.alu.put_left(self.datapath.get_value_register("AC"))
+            self.tick_tick()
+            self.datapath.set_value_register("AC", self.alu.action(ALU.inversion))
+            self.set_nzvc(Z)
+            self.datapath.set_value_register("PS", self.get_nzvc())
+            self.tick_tick()
+        # CMP
         else:
-            if ins.instruction == InstructionType.JMP:
-                ## Decoder -> IP
-                arg = ins.args[0]
-                assert arg in self.fun[
-                    position].keys(), "You are trying jump to a label which is not in his own function"
-                self.datapath.set_value_register("IP", self.fun[position][arg])
-                self.tick_tick()
-            elif ins.instruction == InstructionType.CALL:
-                # AC->BR save parameter
-                self.alu.put_left(self.datapath.get_value_register('AC'))
-                self.datapath.set_value_register("BR", self.alu.action(ALU.or_operation))
-                self.tick_tick()
-                # IP ->　AC
-                arg = ins.args[0]
-                assert arg in self.fun.keys(), "You are trying call a not existed function"
-                self.alu.put_right(self.datapath.get_value_register('IP'))
-                self.datapath.set_value_register("AC", self.alu.action(ALU.or_operation))
-                self.tick_tick()
-                # push
-                new_ins = Instruction(InstructionType.PUSH, [])
-                self.ins_execute(new_ins, position)
-                # Decoder -> IP
-                self.datapath.set_value_register("IP", self.fun[arg]['self'])
-                self.position.append(arg)
-                self.tick_tick()
-                # BR->AC save parameter
-                self.alu.put_left(self.datapath.get_value_register('BR'))
-                self.datapath.set_value_register("AC", self.alu.action(ALU.or_operation))
-                self.tick_tick()
-            elif ins.instruction == InstructionType.RET:
-                # AC->BR make sure that result.tmp of function is saved
-                self.datapath.set_value_register("BR", self.datapath.get_value_register("AC"))
-                self.tick_tick()
-                # pop
-                new_ins = Instruction(InstructionType.POP, [])
-                self.ins_execute(new_ins, self.position[-1])
-                self.position.pop()
-                # AC -> IP
-                self.alu.put_left(self.datapath.get_value_register("AC"))
-                self.datapath.set_value_register("IP", self.alu.action(ALU.or_operation))
-                self.tick_tick()
-                # BR->AC
-                self.datapath.set_value_register("AC", self.datapath.get_value_register("BR"))
-                self.tick_tick()
-            elif ins.instruction == InstructionType.JZ:
-                if self.datapath.get_value_register("PS") | Z == Z and self.datapath.get_value_register("PS") != 0:
-                    ins_2 = Instruction(InstructionType.JMP, args=ins.args)
-                    self.ins_execute(ins_2, position)
-            elif ins.instruction == InstructionType.JS:
-                if self.datapath.get_value_register("PS") | N == N and self.datapath.get_value_register("PS") != 0:
-                    ins_2 = Instruction(InstructionType.JMP, args=ins.args)
-                    self.ins_execute(ins_2, position)
-            # JNZ
+            self.alu.put_right(self.addressing(ins))
+            # AC - arg to check nzcv -> PS
+            self.alu.put_left(self.datapath.get_value_register("AC"))
+            self.alu.action(ALU.min)
+            self.datapath.set_value_register("PS", self.get_nzvc())
+            self.tick_tick()
+
+    def load_data(self, ins: Instruction, arg: str):
+        """ 处理 LD 指令中的数据加载 """
+        assert arg != 'OUTPUT', 'Instruction LD can\'t call OUTPUT'
+        if arg != 'INPUT':
+            self.datapath.set_value_register('AC', self.addressing(ins))
+            self.tick_tick()
+        elif arg == 'INPUT':
+            # index -> AR， io->ac
+            assert self.datapath.output_index < self.datapath.size, 'Read input out of range!'
+            self.datapath.set_value_register("AR", self.datapath.output_index)
+            self.datapath.output_index += 1
+            self.tick_tick()
+            self.datapath.set_value_register("AC",
+                                             self.datapath.memory[self.datapath.get_value_register('AR')].value)
+            self.tick_tick()
+
+    def store_data(self, arg):
+        """ 处理 ST 指令中的数据存储 """
+        assert arg != 'INPUT', 'Instruction ST can\'t call input'
+        if arg != 'OUTPUT':
+            assert arg in self.var.keys() or check_string("^[1-9][0-9]*",
+                                                          arg), 'You have to declare where you want to save the value by declaring a variable or address'
+            # arg ->　ar
+            if arg in self.var.keys():
+                self.alu.put_right(self.var[arg])
             else:
-                if self.datapath.get_value_register("PS") != Z:
-                    ins_2 = Instruction(InstructionType.JMP, args=ins.args)
-                    self.ins_execute(ins_2, position)
-        return 0
+                self.alu.put_right(int(arg))
+            self.datapath.set_value_register("AR", self.alu.action(ALU.or_operation))
+            # AC -> [AR]
+            self.datapath.set_value_memory(self.datapath.get_value_register("AR"),
+                                           self.datapath.get_value_register("AC"))
+            self.tick_tick()
+        else:
+            # AC -> outputbuffer
+            self.datapath.output_buffer.buf[
+                self.datapath.output_buffer.write_pointer] = self.datapath.get_value_register('AC')
+            self.datapath.output_buffer.write_pointer += 1
+            self.tick_tick()
+
+    def handle_data(self, ins: Instruction):
+        """ 数据指令操作 """
+        arg = ins.args[0]
+        if ins.instruction == InstructionType.LD:
+            self.load_data(ins, arg)
+        # ST
+        else:
+            self.store_data(arg)
+
+    def handle_stack(self, ins):
+        """ 堆栈操作 """
+        if ins.instruction == InstructionType.PUSH:
+            """ 进栈 """
+            # SP-1 -> SP
+            self.datapath.set_value_register('SP', self.datapath.get_value_register('SP') - 1)
+            self.tick_tick()
+            # AC -> STACK[SP]
+            self.datapath.stack[self.datapath.get_value_register("SP")] = self.datapath.get_value_register("AC")
+            self.tick_tick()
+        else:
+            """ 出栈 """
+            # [SP] -> AC
+            self.datapath.set_value_register("AC", self.datapath.stack[self.datapath.get_value_register("SP")])
+            self.tick_tick()
+            # SP + 1 -> SP
+            self.datapath.set_value_register('SP', self.datapath.get_value_register('SP') - 1)
+            self.tick_tick()
+
+    def jump_to_label(self, label, position):
+        """ 跳转到指定标签 """
+        assert label in self.fun[position].keys(), "Trying to jump to a label not in the current function"
+        self.datapath.set_value_register("IP", self.fun[position][label])
+        self.tick_tick()
+
+    def handle_other(self, ins: Instruction, position: str):
+        """ 其他指令调用 """
+        if ins.instruction == InstructionType.JMP:
+            # Decoder -> IP
+            self.jump_to_label(ins.args[0], position)
+        elif ins.instruction == InstructionType.CALL:
+            # AC->BR save parameter
+            self.alu.put_left(self.datapath.get_value_register('AC'))
+            self.datapath.set_value_register("BR", self.alu.action(ALU.or_operation))
+            self.tick_tick()
+            # IP ->　AC
+            arg = ins.args[0]
+            assert arg in self.fun.keys(), "You are trying call a not existed function"
+            self.alu.put_right(self.datapath.get_value_register('IP'))
+            self.datapath.set_value_register("AC", self.alu.action(ALU.or_operation))
+            self.tick_tick()
+            # push
+            new_ins = Instruction(InstructionType.PUSH, [])
+            self.ins_execute(new_ins, position)
+            # Decoder -> IP
+            self.datapath.set_value_register("IP", self.fun[arg]['self'])
+            self.position.append(arg)
+            self.tick_tick()
+            # BR->AC save parameter
+            self.alu.put_left(self.datapath.get_value_register('BR'))
+            self.datapath.set_value_register("AC", self.alu.action(ALU.or_operation))
+            self.tick_tick()
+        elif ins.instruction == InstructionType.RET:
+            # AC->BR make sure that result.tmp of function is saved
+            self.datapath.set_value_register("BR", self.datapath.get_value_register("AC"))
+            self.tick_tick()
+            # pop
+            new_ins = Instruction(InstructionType.POP, [])
+            self.ins_execute(new_ins, self.position[-1])
+            self.position.pop()
+            # AC -> IP
+            self.alu.put_left(self.datapath.get_value_register("AC"))
+            self.datapath.set_value_register("IP", self.alu.action(ALU.or_operation))
+            self.tick_tick()
+            # BR->AC
+            self.datapath.set_value_register("AC", self.datapath.get_value_register("BR"))
+            self.tick_tick()
+        elif ins.instruction == InstructionType.JZ:
+            if self.datapath.get_value_register("PS") | Z == Z and self.datapath.get_value_register("PS") != 0:
+                ins_2 = Instruction(InstructionType.JMP, args=ins.args)
+                self.ins_execute(ins_2, position)
+        elif ins.instruction == InstructionType.JS:
+            if self.datapath.get_value_register("PS") | N == N and self.datapath.get_value_register("PS") != 0:
+                ins_2 = Instruction(InstructionType.JMP, args=ins.args)
+                self.ins_execute(ins_2, position)
+        # JNZ
+        else:
+            if self.datapath.get_value_register("PS") != Z:
+                ins_2 = Instruction(InstructionType.JMP, args=ins.args)
+                self.ins_execute(ins_2, position)
+
+    def ins_execute(self, ins: Instruction, position: str) -> int:
+        # 退出指令
+        if ins.instruction == InstructionType.HLT:
+            return exit_flag
+        # math指令
+        elif ins.instruction in MATH_INSTRUCTION:
+            self.handler_math(ins)
+        # 数据指令
+        elif ins.instruction in DATA_INSTRUCTION:
+            self.handle_data(ins)
+        elif ins.instruction in STACK_INSTRUCTION:
+            self.handle_stack(ins)
+        else:
+            self.handle_other(ins, position)
+        return continue_flag
 
     def run_ins(self, position: str) -> int:
         """ 执行指令 """
@@ -519,6 +554,7 @@ class CPU:
         first = True
         output_result = True
         result = ""
+        """ 输出缓冲区 """
         for i in self.datapath.output_buffer.buf:
             if first:
                 first = False
@@ -537,6 +573,11 @@ class CPU:
 
 
 def start(sourcefile, inputfile):
+    """
+    算法执行
+    @param sourcefile 算法输入文件
+    @param inputfile  结果输出文件
+     """
     program = read_code(sourcefile)
     datapath = DataPath(1024, inputfile)
     cpu = CPU(program=program, datapath=datapath)

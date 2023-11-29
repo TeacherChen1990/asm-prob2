@@ -14,6 +14,7 @@ def translate(source_name: str, target_name: str):
     result, function_point, label_in_fun, variable, instruction_index = read_asm_file(source_name)
     write_translate(target_name, result, function_point, label_in_fun, variable, instruction_index)
 
+
 def read_asm_file(source_name):
     """ 读取asm程序源码 """
     result, last_fun = "", ""
@@ -48,10 +49,10 @@ def read_asm_file(source_name):
         is_first_fun = True
         while line:
             if line != "" and line != "\n":
-                ## a function or label
-                if check_string("^\S*:$", line):
+                # 函数、标签
+                if check_string("^\\S*:$", line):
                     line = pre_translation(line)
-                    if check_string("^\.\S*:$", line):
+                    if check_string("^\\.\\S*:$", line):
                         line = line.replace(":", "")
                         label_in_fun[last_fun][line] = instruction_index
                     else:
@@ -62,7 +63,7 @@ def read_asm_file(source_name):
                         if is_first_fun:
                             assert last_fun == '_START', 'Your first function should be _start'
                             is_first_fun = False
-                else:  ## normal instructions
+                else:  # 指令
                     line = line.split(";")[0]
                     line = re.sub(r"\t+", "", line)
                     line = re.sub(r"\n", "", line)
